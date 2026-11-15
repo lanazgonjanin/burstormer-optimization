@@ -44,6 +44,7 @@ parser = argparse.ArgumentParser(description='Real burst super-resolution using 
 
 parser.add_argument('--result_dir', default='./Results/Real/', type=str, help='Directory for results')
 parser.add_argument('--weights', default='./Trained_models/Real/model_best.pth', type=str, help='Path to pre-trained weights')
+parser.add_argument('--ref_frame', default=0, type=int, help='Index (0-13) of the burst frame used as the reference')
 
 args = parser.parse_args()
 
@@ -79,7 +80,7 @@ class BurstSR_Test_Network():
         
         ################## DATA Loaders ########################################
         
-        test_dataset = BurstSRDataset(root="./burstsr_dataset",  split='val', burst_size=14, crop_sz=80, random_flip=False)
+        test_dataset = BurstSRDataset(root="./burstsr_dataset",  split='val', burst_size=14, crop_sz=80, random_flip=False, ref_id=args.ref_frame)
         test_data_loader = DataLoader(test_dataset, batch_size=1)
         
         PSNR = []
