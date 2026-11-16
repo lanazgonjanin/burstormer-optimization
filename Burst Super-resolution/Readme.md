@@ -29,3 +29,36 @@ python Burstormer_Track_2_training.py
 python Track_2_evaluation.py
 ```
 - Results: stored in './Results/Real/Developement Phase'
+
+
+## Reference-frame selection experiment (real BurstSR)
+The original evaluation always uses raw frame 0 as the reference. `reference_frame_sweep.py` evaluates each burst
+with every candidate reference frame (chosen frame first, remaining frames in capture order) and reports aligned
+PSNR / SSIM / LPIPS per frame, plus an oracle (best frame per burst) and a sharpest-frame policy.
+
+### Setup
+```
+python -m venv .venv
+.venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
+pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements-ref-frame.txt
+```
+Data and weights (run from this folder). The original ETH and SharePoint links in the sections above are dead.
+- **BurstSR val set** (~1.5 GB, Google Drive mirror from [deep-burst-sr](https://github.com/goutamgmb/deep-burst-sr)):
+  `gdown 1Qjx1jCMhdabkCedoJP704cGyM3wo8QiH -O burstsr_dataset/val.zip`, then unzip so you have `burstsr_dataset/val/<burst>/...`
+- **PWC-Net weights**: download `http://content.sniklaus.com/github/pytorch-pwc/network-default.pytorch`
+  and save as `pwcnet/pwcnet-network-default.pth`
+- **Burstormer real-data weights** (mirror linked from [BSRD](https://github.com/placerkyo/BSRD)):
+  https://drive.google.com/file/d/1ME1WuRaL3Bv7tBlbcO5hY-pOZ5439E0C/view — download in a browser if gdown hits the
+  quota limit, and save as `Trained_models/Real/burstormer_real.pth`
+
+### Run
+```
+# Small test: 20 bursts x all 14 reference frames (a few minutes on a modern GPU)
+python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --limit 20 --out_dir ./Results/Real/sweep_quick
+# Specific frames only
+python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --limit 20 --refs 0 4 6 9
+# Check the fast metrics against the original utils.metrics implementation
+python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --verify_metrics 4
+```
+Outputs `per_burst.csv` (one row per burst x reference frame) and `summary.csv` in `--out_dir`.

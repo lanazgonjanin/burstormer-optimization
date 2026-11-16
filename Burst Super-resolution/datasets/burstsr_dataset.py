@@ -218,7 +218,8 @@ def load_txt(path):
 class BurstSRDataset(torch.utils.data.Dataset):
     """ Real-world burst super-resolution dataset. """
     def __init__(self, root: str, burst_size: int = 8, crop_sz: int = 80, center_crop: bool = False,
-                 random_flip: bool = False, split: str = 'train', ref_id: int = 0) -> None:
+                 random_flip: bool = False, split: str = 'train', ref_id: int = 0,
+                 shuffle_frames: bool = True) -> None:
         """
         args:
             root : path of the root directory
@@ -229,6 +230,9 @@ class BurstSRDataset(torch.utils.data.Dataset):
             split: Can be 'train' or 'val'
             ref_id: Index (0-13) of the raw frame to use as the reference. The network always treats
                     position 0 of the burst as the reference, so this frame is placed first.
+            shuffle_frames: If True (original behaviour), the non-reference frames are randomly sampled and
+                    ordered. If False, the first burst_size-1 non-reference frames are used in capture order,
+                    which makes evaluation deterministic (the network's burst pooling is order-sensitive).
         """
         assert burst_size <= 14, 'burst_sz must be less than or equal to 14'
         assert crop_sz <= 80, 'crop_sz must be less than or equal to 80'
@@ -236,6 +240,7 @@ class BurstSRDataset(torch.utils.data.Dataset):
         assert 0 <= ref_id < 14, 'ref_id must be in [0, 13]'
 
         self.ref_id = ref_id
+        self.shuffle_frames = shuffle_frames
 
         root = root + '/' + split
         super().__init__()
@@ -284,7 +289,10 @@ class BurstSRDataset(torch.utils.data.Dataset):
 
         # Sample the non-reference frames from every frame except the chosen reference
         others = [i for i in range(burst_size) if i != self.ref_id]
-        ids = random.sample(others, k=self.burst_size - 1)
+        if self.shuffle_frames:
+            ids = random.sample(others, k=self.burst_size - 1)
+        else:
+            ids = others[:self.burst_size - 1]
         # Reference frame goes first: the network and the aligned metrics use index 0 as the reference
         ids = [self.ref_id, ] + ids
         return ids
