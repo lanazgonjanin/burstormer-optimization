@@ -119,6 +119,23 @@ def frame_sharpness(burst: torch.Tensor) -> torch.Tensor:
     return lap.flatten(1).var(dim=1)  # [N]
 
 
+def spread_across_scenes(burst_names: List[str], n: int) -> List[int]:
+    """Pick n burst indices round-robin over scenes (fixed-seed random crop order within each scene)."""
+    by_scene = defaultdict(list)
+    for idx, name in enumerate(burst_names):
+        by_scene[name.split('_')[0]].append(idx)
+    rng = random.Random(0)
+    queues = [rng.sample(by_scene[s], len(by_scene[s])) for s in sorted(by_scene)]
+    picked: List[int] = []
+    round_ = 0
+    while len(picked) < min(n, len(burst_names)):
+        for q in queues:
+            if round_ < len(q) and len(picked) < n:
+                picked.append(q[round_])
+        round_ += 1
+    return sorted(picked)
+
+
 def reorder(burst: torch.Tensor, ref: int) -> torch.Tensor:
     """Put frame `ref` first and keep the remaining frames in capture order."""
     perm = [ref] + [i for i in range(burst.shape[1]) if i != ref]
@@ -190,7 +207,9 @@ def main() -> None:
     parser.add_argument('--out_dir', default='./Results/Real/ref_frame_sweep', type=str)
     parser.add_argument('--refs', default=list(range(NUM_FRAMES)), type=int, nargs='+',
                         help='Reference frame indices to evaluate (default: all 14)')
-    parser.add_argument('--limit', default=None, type=int, help='Only evaluate the first N bursts')
+    parser.add_argument('--limit', default=None, type=int,
+                        help='Only evaluate N bursts, spread round-robin across the 23 scenes '
+                             '(burst names are <scene>_<crop>, so the first N alphabetically would all be one scene)')
     parser.add_argument('--random_weights', action='store_true',
                         help='Skip loading weights (pipeline smoke test only; metrics are meaningless)')
     parser.add_argument('--verify_metrics', default=0, type=int,
@@ -213,7 +232,7 @@ def main() -> None:
     dataset = BurstSRDataset(root=args.data_root, split='val', burst_size=NUM_FRAMES, crop_sz=80,
                              random_flip=False, ref_id=0, shuffle_frames=False)
     if args.limit is not None:
-        dataset = torch.utils.data.Subset(dataset, range(min(args.limit, len(dataset))))
+        dataset = torch.utils.data.Subset(dataset, spread_across_scenes(dataset.burst_list, args.limit))
     loader = DataLoader(dataset, batch_size=1, num_workers=2)
 
     per_burst_path = os.path.join(args.out_dir, 'per_burst.csv')

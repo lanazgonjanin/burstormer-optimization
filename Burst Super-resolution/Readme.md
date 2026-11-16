@@ -54,8 +54,10 @@ Data and weights (run from this folder). The original ETH and SharePoint links i
 
 ### Run
 ```
-# Small test: 20 bursts x all 14 reference frames (a few minutes on a modern GPU)
-python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --limit 20 --out_dir ./Results/Real/sweep_quick
+# Small test: one burst from each of the 23 scenes x all 14 reference frames (~2-3 min on an RTX 4070)
+python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --limit 23 --out_dir ./Results/Real/sweep_scenes
+# Render images (GT, output per reference frame, raw input frames) for the 4 bursts that vary most
+python visualize_reference_frames.py --sweep_dir ./Results/Real/sweep_scenes --n 4
 # Specific frames only
 python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --limit 20 --refs 0 4 6 9
 # Check the fast metrics against the original utils.metrics implementation
