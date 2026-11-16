@@ -20,6 +20,9 @@ Both tracks depend on a baseline we can trust, so that comes first (Phase 0).
 | Evaluation | `reference_frame_sweep.py`: aligned PSNR / SSIM / LPIPS, verified against the original metric code |
 | Reference-frame test | 23 bursts (one per scene) x 14 reference frames, results below |
 | Checkpoint | `burstormer_real.pth` (epoch 12, mirror linked from the BSRD repo). **Does not reproduce the paper** |
+| Working model | `burstormer_real_calibrated.pth`, our fine-tune of that checkpoint (see "Results so far") |
+
+Findings 1 and 2 were measured on the downloaded checkpoint, before calibration.
 
 ### Finding 1: the reference frame matters, but frame 0 is a reasonable default
 
@@ -59,6 +62,89 @@ undefined variable, so the released code is not exactly what produced the paper 
 **Consequence.** Results from this checkpoint show how *this* model behaves, not how a correctly trained
 Burstormer behaves. Every experiment below reports the bilinear baseline next to the model, and conclusions are
 re-checked once Phase 0 delivers a working model.
+
+## Results so far (2026-11-16)
+
+All numbers below use the calibrated model unless stated, on scenes it was not trained on. Small tests: 12-40
+bursts. Commands are in `Burst Super-resolution/Readme.md`.
+
+### Phase 0: calibrated model (T02, done)
+
+3,000 fine-tuning steps (about 10 minutes) with the Track 2 loss on the 15 train scenes.
+
+| Model | PSNR on 12 dev-scene bursts (dB) |
+|---|---|
+| Downloaded checkpoint | 30.74 |
+| Bilinear upsampling of frame 0 | 41.19 |
+| Calibrated checkpoint | 45.90 |
+
+On 24 test-scene bursts the calibrated model gets 48.44 dB against 43.47 dB for bilinear. These numbers are not
+comparable with the paper's 48.82 dB: the model is trained on part of the val set and scored on a subset.
+
+### Track A: reference frame (T04-T06, first pass on 40 dev bursts)
+
+| Reference policy | PSNR, original metric | PSNR, common region | Gain over frame 0 (common region) |
+|---|---|---|---|
+| Frame 0 | 45.34 | 45.44 | |
+| Frame 2 (best fixed frame) | 45.52 | 45.77 | +0.34 [+0.07, +0.64] |
+| Frame 13 | 38.42 | 43.24 | -2.20 [-2.64, -1.75] |
+| Sharpest frame | 41.97 | 44.59 | -0.85 [-1.29, -0.42] |
+| Sharpest frame after smoothing | 42.75 | 44.90 | -0.54 [-0.95, -0.15] |
+| Most central frame | 42.27 | 44.56 | -0.88 [-1.19, -0.59] |
+| Sharpest of the first 3 frames | 45.48 | 45.65 | +0.22 [+0.02, +0.45] |
+| Best frame per burst (oracle) | 44.93 | 46.03 | +0.59 [+0.33, +0.90] |
+| Oracle, chosen on half the patches and scored on the rest | | | +0.54 |
+
+Intervals are 95% bootstrap over bursts (4 scenes, so they are optimistic).
+
+- **Most of the penalty for late frames was framing.** Frame 13 loses 6.9 dB on the original metric and 2.2 dB
+  when every reference is scored on the same pixels.
+- **The headroom is real, about +0.5 dB.** The split-half check keeps +0.54 of the +0.59 dB oracle gain, so it is
+  not selection noise. T05 decision: go.
+- **The best reference is always one of the first five frames**, and quality falls steadily with frame index
+  (within-burst rank correlation -0.86).
+- **Sharpness and motion centrality over all 14 frames lose to frame 0.** They pick late frames. Restricted to
+  the first 3 frames, sharpness gains a little.
+- **Open confound.** Frame index and distance from frame 0 are equally correlated with quality (-0.86 each), and
+  the ground truth is registered to frame 0. We cannot yet tell "later frames are worse references" from "the
+  metric favours outputs near frame 0". Synthetic bursts, where ground truth can be rendered for any reference,
+  can separate the two (added to T04).
+
+### Track B: limits (T09-T10, first pass)
+
+Noise is added to the raw burst as shot + read noise; the level is the shot-noise coefficient. Synthetic
+Burstormer training covered levels 0.0001 to 0.012.
+
+| Degradation (12 dev bursts, noise 24) | Clean | Where the model breaks |
+|---|---|---|
+| Noise | 45.56 dB | 3 dB down at level 0.0048; below clean bilinear at 0.0077; worse than plain frame averaging at 0.042 |
+| Blur (Gaussian, every frame) | 45.90 dB | 3 dB down at sigma 0.65; no better than bilinear from sigma 1.5 |
+| Fewer distinct frames | 45.90 dB | Degrades steadily; 3 dB down at 4 frames; equals bilinear at 1 frame |
+| Extra misalignment (up to 16 px) | 45.90 dB | Not reached: 45.34 dB at 16 px |
+| Outlier frames | 45.90 dB | Not reached: 43.89 dB with all 13 non-reference frames misaligned |
+
+The model is robust to misalignment and outlier frames, and fragile to noise and blur. At noise level 0.1 the
+output is structured artefacts and scores 6 dB below a plain average of the frames.
+
+### Track B: mitigation (T13, first pass)
+
+Same 3,000-step fine-tune with noise augmentation (half of the training bursts get noise at a level drawn
+log-uniformly from 0.0001 to 0.1).
+
+| Noise level | Calibrated (dB) | Noise-augmented (dB) | Change |
+|---|---|---|---|
+| 0 (clean) | 48.44 | 48.32 | -0.12 |
+| 0.003 | 46.18 | 46.85 | +0.67 |
+| 0.01 | 42.56 | 45.39 | +2.83 |
+| 0.03 | 36.25 | 42.03 | +5.78 |
+| 0.1 | 23.22 | 35.68 | +12.46 |
+
+24 test-scene bursts. The 3 dB breaking level moves from 0.0038 to 0.0102 (2.7x) and the level at which the
+model falls below clean bilinear from 0.0074 to 0.0187 (2.5x). The dev split shows the same (0.0048 to 0.0095).
+Clean-input cost: -0.12 dB PSNR on test (+0.15 dB on dev), LPIPS slightly worse (0.047 to 0.049). The clean cost
+is at the 0.1 dB budget, so it needs a larger run before we call it met.
+
+Image panels: `Results/Real/noise_panel/` after running the Readme commands.
 
 ## Phases
 
@@ -139,3 +225,14 @@ numbers are provisional until re-run on the Phase 0 model.
 
 - 2026-11-15: environment ported, reference-frame sweep and visualisation added, 23-burst test run.
 - 2026-11-16: checkpoint diagnosed (Finding 2), plan and tickets written.
+- 2026-11-16: calibration fine-tune (T02), scene splits (T03, partly), common-region scoring and selection
+  policies (T04-T06 first pass), degradation harness and breaking points (T09-T10 first pass), noise-augmented
+  fine-tune (T13 first pass). See "Results so far".
+
+## Next steps
+
+1. T01: ask upstream for the correct checkpoint; decide whether to download the BurstSR train set.
+2. T04: resolve the frame-0 registration confound on synthetic bursts before building a learned selector.
+3. T06: test "sharpest of the first 3" and fixed frame 2 on the test scenes with more bursts.
+4. T11: find out which stage fails under noise and under blur.
+5. T13: longer noise-augmented run, noise-level conditioning, and a blur counterpart; full val-set numbers.

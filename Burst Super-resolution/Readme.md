@@ -64,3 +64,43 @@ python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.
 python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real.pth --verify_metrics 4
 ```
 Outputs `per_burst.csv` (one row per burst x reference frame) and `summary.csv` in `--out_dir`.
+
+
+## Optimization experiments (plan: [../docs/PLAN.md](../docs/PLAN.md), tickets: [../docs/TICKETS.md](../docs/TICKETS.md))
+All commands run from this folder with the setup above. `splits/{train,dev,test}.txt` split the 882 val bursts by
+scene (15 / 4 / 4 scenes), because crops of one scene are near-duplicates.
+
+### 1. Calibrated model (needed first)
+The downloaded `burstormer_real.pth` produces output in a different colour space from its input and scores below
+bilinear upsampling under the aligned metrics. A short fine-tune with the Track 2 loss on the train scenes fixes
+that (about 10 min on an RTX 4070; downloads the 528 MB VGG weights for LPIPS on first use):
+```
+python finetune_real.py --init ./Trained_models/Real/burstormer_real.pth --out ./Trained_models/Real/burstormer_real_calibrated.pth --steps 3000
+```
+It prints PSNR on held-out dev-scene bursts next to the bilinear baseline. Numbers from this model are comparable
+with each other, not with the paper (it is trained on part of the val set).
+
+### 2. Reference-frame selection
+```
+# Every frame as reference on dev-scene bursts. Also scores each reference on the image region common to all of
+# them (PSNR_common), since the ground-truth crop is framed on frame 0.
+python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real_calibrated.pth --bursts_file ./splits/dev.txt --limit 40 --out_dir ./Results/Real/sweep_dev
+# Selection policies (sharpest, most central, ...) vs frame 0 with confidence intervals; no GPU needed
+python analyze_reference_policies.py --sweep_dir ./Results/Real/sweep_dev
+```
+
+### 3. Limits: how much degradation the model tolerates
+```
+# Noise sweep (shot + read noise added to the raw burst). Other degradations: frames, shift, blur, outlier
+python robustness_sweep.py --weights ./Trained_models/Real/burstormer_real_calibrated.pth --degradation noise --bursts_file ./splits/dev.txt --limit 24 --save_images 2
+```
+Prints model / bilinear / burst-mean PSNR per level and the level at which the model breaks. Results go to
+`./Results/Real/robustness_<degradation>` unless `--out_dir` is given.
+
+### 4. Mitigation: noise-augmented fine-tuning
+```
+python finetune_real.py --init ./Trained_models/Real/burstormer_real.pth --out ./Trained_models/Real/burstormer_real_noise_aug.pth --steps 3000 --noise_max 0.1
+python robustness_sweep.py --weights ./Trained_models/Real/burstormer_real_noise_aug.pth --degradation noise --bursts_file ./splits/dev.txt --limit 24 --save_images 2 --out_dir ./Results/Real/robustness_noise_aug
+# Side-by-side images: input / calibrated / noise-augmented at every noise level, plus the ground truth
+python robustness_panel.py --runs calibrated=./Results/Real/robustness_noise noise_aug=./Results/Real/robustness_noise_aug --out ./Results/Real/noise_panel
+```

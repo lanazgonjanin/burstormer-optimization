@@ -40,9 +40,9 @@ pipeline. A short fine-tune with the repo's own loss (aligned L1 + LPIPS, colour
 should bring the output back to the input's colour space. The same script is needed later for T08 and T13.
 
 **Tasks.**
-- [ ] `finetune_real.py`: fine-tune `Base_Model` from a checkpoint with the Track 2 loss, random crops and flips.
-- [ ] Scene-level split of the val set (train scenes / held-out scenes), written to a file and reused everywhere.
-- [ ] Fine-tune on the train scenes; evaluate on the held-out scenes against bilinear and the original checkpoint.
+- [x] `finetune_real.py`: fine-tune `Base_Model` from a checkpoint with the Track 2 loss, random crops and flips.
+- [x] Scene-level split of the val set (train scenes / held-out scenes), written to a file and reused everywhere.
+- [x] Fine-tune on the train scenes; evaluate on the held-out scenes against bilinear and the original checkpoint.
 - [ ] If the val-only model is good enough to work with, decide whether to download the BurstSR train set
       (tens of GB) for a model comparable to the paper.
 
@@ -57,10 +57,10 @@ Milestone: M0 Trustworthy baseline
 resampled by scene. Single-number comparisons on 23 bursts cannot separate a 0.15 dB effect from noise.
 
 **Tasks.**
-- [ ] `splits/dev.txt` and `splits/test.txt` (scene-level, fixed), plus the T02 train/held-out split.
+- [x] `splits/dev.txt` and `splits/test.txt` (scene-level, fixed), plus the T02 train/held-out split.
 - [ ] Shared helper: paired per-burst differences with a bootstrap 95% interval resampled over scenes.
 - [ ] Bilinear-reference-frame baseline reported by every evaluation script.
-- [ ] `--bursts_file` option on the sweep scripts.
+- [x] `--bursts_file` option on the sweep scripts.
 
 **Done when.** Every results table has a baseline row, an interval on each difference, and names the split used.
 
@@ -74,10 +74,13 @@ shifted area, part of the ground truth is never seen, and the metric penalises g
 Later frames drift further, so they look worse than they are.
 
 **Tasks.**
-- [ ] Per burst, compute the region that is valid for every candidate reference (intersection of the metric's
+- [x] Per burst, compute the region that is valid for every candidate reference (intersection of the metric's
       valid masks) and score all candidates on that region only.
-- [ ] Report both the original and the common-region numbers.
-- [ ] Re-run the 23-burst test and see whether the downward trend for late frames survives.
+- [x] Report both the original and the common-region numbers.
+- [x] Re-run on dev bursts: frame 13 loses 6.9 dB on the original metric, 2.2 dB on the common region.
+- [ ] Separate "later frames are worse" from "the metric favours outputs near frame 0" (the ground truth is
+      registered to frame 0): repeat the sweep on synthetic bursts, where ground truth can be rendered for any
+      reference.
 
 **Done when.** We can say how much of the reference-frame effect is framing and how much is real.
 
@@ -91,7 +94,7 @@ upward. We need the headroom a real selector could reach before investing in one
 
 **Tasks.**
 - [ ] Estimate metric noise: repeat each (burst, reference) with the other frames in shuffled order.
-- [ ] Split-half check: choose the best reference on half of the patches, score it on the other half.
+- [x] Split-half check: choose the best reference on half of the patches, score it on the other half.
 - [ ] Report corrected headroom with an interval, on the dev split.
 
 **Done when.** A go / no-go decision for Track A is recorded: go if corrected headroom is at least about 0.2 dB.
@@ -105,11 +108,11 @@ Depends on: T05
 plain variance-of-Laplacian sharpness already failed here (-0.62 dB), probably because it rewards noise.
 
 **Tasks.**
-- [ ] Motion-central frame: the frame with the smallest mean displacement to all others (phase correlation or
+- [x] Motion-central frame: the frame with the smallest mean displacement to all others (phase correlation or
       PWC-Net on demosaiced frames).
-- [ ] Noise-robust sharpness: gradient energy after smoothing, or after subtracting the estimated noise floor.
+- [x] Noise-robust sharpness: gradient energy after smoothing, or after subtracting the estimated noise floor.
 - [ ] Maximum overlap with frame 0's field of view (control for the framing effect).
-- [ ] Combined score (sharpness within the k most central frames).
+- [x] Combined score (sharpness within the k most central frames).
 - [ ] `--ref_policy` option in `reference_frame_sweep.py` and `Track_2_evaluation.py`.
 - [ ] Table against frame 0, best fixed frame and the oracle, on dev then test.
 
@@ -154,16 +157,17 @@ Depends on: T03
 **Why.** To find where Burstormer breaks we need controlled, repeatable degradations of real bursts.
 
 **Tasks.**
-- [ ] `robustness_sweep.py` with degradations applied to the raw burst before the model:
+- [x] `robustness_sweep.py` with degradations applied to the raw burst before the model (noise, frames, shift,
+      blur, outlier done; low light still to do):
   - noise: signal-dependent shot noise + read noise (`data_processing/camera_pipeline.add_noise` model);
   - low light: scale exposure down, add noise, apply gain back;
   - fewer usable frames: replace k frames with copies of the reference;
   - extra misalignment: integer shifts of the non-reference frames;
   - blur: Gaussian blur on a subset of frames;
   - one corrupted frame: strong noise or a large shift on a single frame.
-- [ ] Clean burst used for the metric's colour matching; degraded burst only goes to the model.
-- [ ] Fixed seeds so every level is reproducible; per-burst CSV and summary per level.
-- [ ] Bilinear baseline on the same degraded reference frame at every level.
+- [x] Clean burst used for the metric's colour matching; degraded burst only goes to the model.
+- [x] Fixed seeds so every level is reproducible; per-burst CSV and summary per level.
+- [x] Bilinear baseline on the same degraded reference frame at every level.
 
 **Done when.** One command produces a metric-versus-level table for any degradation on any burst list.
 
@@ -223,7 +227,7 @@ Depends on: T02, T11
 **Why.** The likely strongest fix. The real-data model has only seen the noise levels in BurstSR.
 
 **Tasks.**
-- [ ] Noise augmentation in `finetune_real.py` (random shot/read levels from the T09 model).
+- [x] Noise augmentation in `finetune_real.py` (random shot/read levels from the T09 model).
 - [ ] Noise-level conditioning: an extra input channel carrying the per-pixel noise standard deviation.
 - [ ] Depending on T11: a noise-aware weighting in fusion (down-weight frames by estimated noise and
       misalignment), in the spirit of Wiener merging in HDR+.
