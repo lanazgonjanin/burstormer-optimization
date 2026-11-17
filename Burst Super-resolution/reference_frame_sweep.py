@@ -32,6 +32,7 @@ from torch.utils.data.dataloader import DataLoader
 from Network_Real_burstSR import Base_Model
 from datasets.burstsr_dataset import BurstSRDataset
 from pwcnet.pwcnet import PWCNet
+from ref_selection import GUARD_MARGIN, guarded_choice
 import utils.spatial_color_alignment as sca_utils
 from utils.metrics import make_patches
 from utils.warp import warp
@@ -265,6 +266,19 @@ def reorder(burst: torch.Tensor, ref: int) -> torch.Tensor:
     """Put frame `ref` first and keep the remaining frames in capture order."""
     perm = [ref] + [i for i in range(burst.shape[1]) if i != ref]
     return burst[:, perm]
+
+
+def select_reference(burst: torch.Tensor, policy: str, margin: float = GUARD_MARGIN) -> int:
+    """Index of the frame to use as reference, from the input burst alone. burst: [1, N, 4, H, W].
+    Policies: frame0 (original behaviour), frame2 (best fixed frame on dev), guarded (see ref_selection.py)."""
+    if policy == 'frame0':
+        return 0
+    if policy == 'frame2':
+        return 2
+    if policy == 'guarded':
+        sharp = frame_sharpness_smoothed(burst).tolist()
+        return guarded_choice(dict(enumerate(sharp)), margin=margin)
+    raise ValueError(f'Unknown reference policy {policy}')
 
 
 def summarise(rows: List[Dict], refs: List[int]) -> List[Dict]:

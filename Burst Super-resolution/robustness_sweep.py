@@ -14,6 +14,12 @@ Degradations (--degradation) and what the level means:
     blur     Gaussian blur sigma applied to every frame, in packed raw pixels
     outlier  number of non-reference frames replaced by a badly misaligned copy (shifted by half the crop)
 
+Two options turn this into a test of reference-frame selection:
+    --degrade_frames 0        damage only the listed frames (capture order); noise and blur only. E.g. `0` damages
+                              the default reference alone, `1 2 ... 13` everything except it.
+    --ref_policy guarded      choose the reference from the (damaged) burst before running the model: frame0, frame2
+                              or guarded (see ref_selection.py). Shows whether a selector avoids a damaged frame.
+
 Outputs (in --out_dir): per_burst.csv, summary.csv, and with --save_images N a folder of images per burst and level.
 
 Example:
@@ -25,7 +31,7 @@ import argparse
 import csv
 import math
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Dict, List, Optional
 
 import cv2
@@ -35,8 +41,9 @@ import torch.nn.functional as F
 
 from datasets.burstsr_dataset import BurstSRDataset
 from pwcnet.pwcnet import PWCNet
-from reference_frame_sweep import (NUM_FRAMES, FastAlignedMetrics, bilinear_reference, load_model, select_bursts,
-                                   set_seed)
+from ref_selection import GUARD_MARGIN, REF_POLICIES
+from reference_frame_sweep import (NUM_FRAMES, FastAlignedMetrics, bilinear_reference, load_model, reorder,
+                                   select_bursts, select_reference, set_seed)
 from utils.metrics import AlignedPred
 from utils.postprocessing_functions import process_burstsr_image_rgb
 
@@ -130,7 +137,15 @@ def main() -> None:
     parser.add_argument('--limit', default=None, type=int, help='Only N bursts, spread across scenes')
     parser.add_argument('--save_images', default=0, type=int, help='Save images at every level for the first N bursts')
     parser.add_argument('--seed', default=0, type=int)
+    parser.add_argument('--degrade_frames', default=None, type=int, nargs='+',
+                        help='Capture-order indices of the frames to degrade (default: all). Noise and blur only')
+    parser.add_argument('--ref_policy', default='frame0', choices=REF_POLICIES,
+                        help='How the reference frame is chosen, from the degraded burst (default: frame 0)')
+    parser.add_argument('--guard_margin', default=GUARD_MARGIN, type=float,
+                        help='Guarded policy: how far the sharpness of frame 2 may be from its neighbours before it is replaced')
     args = parser.parse_args()
+    if args.degrade_frames is not None and args.degradation not in ('noise', 'blur'):
+        parser.error('--degrade_frames only applies to the noise and blur degradations')
 
     kind = args.degradation
     levels = args.levels or DEFAULT_LEVELS[kind]
@@ -148,7 +163,7 @@ def main() -> None:
     gen = torch.Generator(device='cuda')
 
     rows: List[Dict] = []
-    fields = ['burst', 'degradation', 'level', 'method', 'psnr', 'ssim', 'lpips', 'input_psnr']
+    fields = ['burst', 'degradation', 'level', 'method', 'ref', 'psnr', 'ssim', 'lpips', 'input_psnr']
     per_burst_path = os.path.join(out_dir, 'per_burst.csv')
     with open(per_burst_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -168,24 +183,32 @@ def main() -> None:
             for li, level in enumerate(levels):
                 gen.manual_seed(args.seed * 1000003 + idx * 101 + li)
                 bad = degrade(burst, kind, level, gen)
+                if args.degrade_frames is not None and level != CLEAN_LEVEL[kind]:
+                    mixed = burst.clone()
+                    mixed[:, args.degrade_frames] = bad[:, args.degrade_frames]
+                    bad = mixed
+                # The reference is chosen from what the model would actually receive, then moved to the front.
+                # `clean` is the undamaged burst in the same order, used only by the metric.
+                ref = select_reference(bad, args.ref_policy, args.guard_margin)
+                bad, clean = reorder(bad, ref), reorder(burst, ref)
                 with torch.no_grad():
                     outputs = {'model': model(bad).clamp(0.0, 1.0),
                                'bilinear': bilinear_reference(bad),
                                'burst_mean': bilinear_reference(bad.mean(dim=1, keepdim=True))}
                 # How far the degraded reference frame is from the clean one (raw domain)
-                mse_in = F.mse_loss(bad[:, 0], burst[:, 0]).item()
+                mse_in = F.mse_loss(bad[:, 0], clean[:, 0]).item()
                 input_psnr = '' if mse_in == 0 else -10 * math.log10(mse_in)
                 for method, out in outputs.items():
                     # Colour matching inside the metric uses the CLEAN burst
-                    psnr, ssim, lp = metrics(out, gt, burst)
-                    row = {'burst': name, 'degradation': kind, 'level': level, 'method': method, 'psnr': psnr,
-                           'ssim': ssim, 'lpips': lp, 'input_psnr': input_psnr}
+                    psnr, ssim, lp = metrics(out, gt, clean)
+                    row = {'burst': name, 'degradation': kind, 'level': level, 'method': method, 'ref': ref,
+                           'psnr': psnr, 'ssim': ssim, 'lpips': lp, 'input_psnr': input_psnr}
                     rows.append(row)
                     writer.writerow(row)
 
                 if save:
                     with torch.no_grad():
-                        pred_m, _, valid = aligner(outputs['model'], gt, burst)
+                        pred_m, _, valid = aligner(outputs['model'], gt, clean)
                     if display_gain is None:
                         # Display only: one per-channel gain per burst, from the first level, so brightness matches
                         # the ground truth. Applied identically at every level; metrics are not affected.
@@ -213,7 +236,9 @@ def main() -> None:
             summary.append({'degradation': kind, 'level': level, 'method': method, 'n_bursts': len(sel),
                             'psnr': np.mean([s['psnr'] for s in sel]), 'ssim': np.mean([s['ssim'] for s in sel]),
                             'lpips': np.mean([s['lpips'] for s in sel]),
-                            'input_psnr': np.mean(in_psnr) if in_psnr else ''})
+                            'input_psnr': np.mean(in_psnr) if in_psnr else '',
+                            'refs_used': ' '.join(f'{r}:{c}' for r, c in
+                                                  sorted(Counter(s['ref'] for s in sel).items()))})
     summary_path = os.path.join(out_dir, 'summary.csv')
     with open(summary_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
@@ -221,14 +246,15 @@ def main() -> None:
         writer.writerows(summary)
 
     mean = {(s['level'], s['method']): s for s in summary}
-    print(f'\n{kind}: mean over {len(indices)} bursts')
+    which = 'all frames' if args.degrade_frames is None else f'frames {args.degrade_frames} only'
+    print(f'\n{kind} on {which}, reference policy {args.ref_policy}: mean over {len(indices)} bursts')
     print(f'{"level":>8}{"input dB":>10} | {"model PSNR":>10}{"SSIM":>7}{"LPIPS":>7} | {"bilinear":>9}{"burst_mean":>11}'
-          f' | {"model-bilinear":>14}')
+          f' | {"model-bilinear":>14} | reference used (frame:bursts)')
     for level in levels:
         m, b, a = mean[(level, 'model')], mean[(level, 'bilinear')], mean[(level, 'burst_mean')]
         in_psnr = f'{m["input_psnr"]:.1f}' if m['input_psnr'] != '' else 'clean'
         print(f'{level:>8g}{in_psnr:>10} | {m["psnr"]:>10.2f}{m["ssim"]:>7.3f}{m["lpips"]:>7.3f} | {b["psnr"]:>9.2f}'
-              f'{a["psnr"]:>11.2f} | {m["psnr"] - b["psnr"]:>+14.2f}')
+              f'{a["psnr"]:>11.2f} | {m["psnr"] - b["psnr"]:>+14.2f} | {m["refs_used"]}')
 
     # Breaking points along the sweep direction
     model_psnr = [mean[(lv, 'model')]['psnr'] for lv in levels]

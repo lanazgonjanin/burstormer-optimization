@@ -89,6 +89,19 @@ python reference_frame_sweep.py --weights ./Trained_models/Real/burstormer_real_
 python analyze_reference_policies.py --sweep_dir ./Results/Real/sweep_dev
 ```
 
+The `guarded` policy in that table is the selector in `ref_selection.py`: frame 2, unless its sharpness is abnormal
+next to the other first five frames, in which case the most typical of those frames is used.
+
+To test what one damaged frame costs, and whether the selector avoids it (`--degrade_frames` takes capture-order
+frame indices and works with `noise` and `blur`; `--ref_policy` is `frame0`, `frame2` or `guarded`):
+```
+# Blur only the reference (frame 0)
+python robustness_sweep.py --degradation blur --degrade_frames 0 --bursts_file ./splits/dev.txt --limit 12 --out_dir ./Results/Real/single_blur_ref
+# Blur only frame 2: fixed frame 2 as reference, then the guarded selector
+python robustness_sweep.py --degradation blur --degrade_frames 2 --ref_policy frame2 --bursts_file ./splits/dev.txt --limit 12 --out_dir ./Results/Real/rescue_blur_f2_frame2
+python robustness_sweep.py --degradation blur --degrade_frames 2 --ref_policy guarded --bursts_file ./splits/dev.txt --limit 12 --out_dir ./Results/Real/rescue_blur_f2_guarded
+```
+
 ### 3. Limits: how much degradation the model tolerates
 ```
 # Noise sweep (shot + read noise added to the raw burst). Other degradations: frames, shift, blur, outlier
@@ -101,6 +114,9 @@ Prints model / bilinear / burst-mean PSNR per level and the level at which the m
 ```
 python finetune_real.py --init ./Trained_models/Real/burstormer_real.pth --out ./Trained_models/Real/burstormer_real_noise_aug.pth --steps 3000 --noise_max 0.1
 python robustness_sweep.py --weights ./Trained_models/Real/burstormer_real_noise_aug.pth --degradation noise --bursts_file ./splits/dev.txt --limit 24 --save_images 2 --out_dir ./Results/Real/robustness_noise_aug
+# Noise + blur augmentation in one model (blur sigma up to 2 packed raw pixels on half of the training bursts)
+python finetune_real.py --init ./Trained_models/Real/burstormer_real.pth --out ./Trained_models/Real/burstormer_real_noise_blur_aug.pth --steps 3000 --noise_max 0.1 --blur_max 2
+python robustness_sweep.py --weights ./Trained_models/Real/burstormer_real_noise_blur_aug.pth --degradation blur --bursts_file ./splits/dev.txt --limit 12 --out_dir ./Results/Real/robustness_blur_nbaug
 # Side-by-side images: input / calibrated / noise-augmented at every noise level, plus the ground truth
 python robustness_panel.py --runs calibrated=./Results/Real/robustness_noise noise_aug=./Results/Real/robustness_noise_aug --out ./Results/Real/noise_panel
 ```

@@ -10,6 +10,8 @@ Policies
     sharpest_smoothed   highest gradient energy after a Gaussian blur
     most_central        smallest mean displacement to the other frames
     central_sharp       sharpest_smoothed among the 4 most central frames
+    guarded             frame 2 unless its sharpness is abnormal next to the other first five frames (ref_selection.py);
+                        a table shows how the result changes with the margin
     oracle              best frame per burst using the ground truth (upper bound, optimistic)
     oracle_split_half   frame chosen on half of the image patches, scored on the other half. If a frame is better
                         for real it is better on both halves; the gap to `oracle` is selection noise.
@@ -27,6 +29,8 @@ from typing import Callable, Dict, List
 
 import numpy as np
 from scipy.stats import spearmanr
+
+from ref_selection import GUARD_DEFAULT, GUARD_MARGIN, GUARD_WINDOW, guarded_choice
 
 HALF_A, HALF_B = [0, 2, 4, 6, 8], [1, 3, 5, 7]  # checkerboard over the 3x3 patch grid
 
@@ -58,6 +62,8 @@ def bootstrap_ci(values: np.ndarray, groups: List[str], n_boot: int = 2000) -> L
 def main() -> None:
     parser = argparse.ArgumentParser(description='Analyse reference-frame selection policies')
     parser.add_argument('--sweep_dir', default='./Results/Real/sweep_dev', type=str)
+    parser.add_argument('--margin', default=GUARD_MARGIN, type=float,
+                        help='Guarded policy: how far the sharpness of frame 2 may be from its neighbours before it is replaced')
     args = parser.parse_args()
 
     by_burst = load(os.path.join(args.sweep_dir, 'per_burst.csv'))
@@ -90,6 +96,14 @@ def main() -> None:
         'oracle_first5': lambda d: max(refs[:5], key=lambda r: d[r]['psnr_common']),
         'oracle': lambda d: max(d, key=lambda r: d[r]['psnr_common']),
     })
+
+    def guarded(margin: float) -> Callable[[Dict[int, Dict]], int]:
+        return lambda d: guarded_choice({r: d[r]['sharpness_smooth'] for r in d}, margin=margin)
+
+    has_guard = GUARD_DEFAULT in refs
+    if has_guard:
+        # Frame 2 unless its sharpness is abnormal next to the other early frames (ref_selection.py)
+        policies['guarded'] = guarded(args.margin)
     for d in by_burst.values():
         for r in d:
             # Distance of this frame from frame 0, which the ground truth is registered to
@@ -109,6 +123,20 @@ def main() -> None:
                          'ci_low': lo, 'ci_high': hi, 'win_rate': wins})
         print(f'{name:<20}{psnr.mean():>8.2f}{common.mean():>13.2f}{gain.mean():>+18.3f}'
               f'{f"[{lo:+.3f}, {hi:+.3f}]":>18}{wins:>7.0%}')
+
+    if has_guard:
+        # How the guarded rule behaves as the margin changes. Choose the margin on dev, report it on test.
+        base_common = np.array([by_burst[b][base]['psnr_common'] for b in bursts])
+        fixed = np.array([by_burst[b][GUARD_DEFAULT]['psnr_common'] for b in bursts])
+        print(f'\nGuarded rule by margin (default frame {GUARD_DEFAULT}, first {GUARD_WINDOW} frames are candidates):')
+        print(f'{"margin":>8}{"gain vs frame " + str(base):>18}{"gain vs frame " + str(GUARD_DEFAULT):>18}'
+              f'{"95% CI":>18}{"switched":>10}')
+        for margin in (0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0):
+            chosen = [guarded(margin)(by_burst[b]) for b in bursts]
+            common = np.array([by_burst[b][c]['psnr_common'] for b, c in zip(bursts, chosen)])
+            lo, hi = bootstrap_ci(common - fixed, scenes)
+            print(f'{margin:>8g}{(common - base_common).mean():>+18.3f}{(common - fixed).mean():>+18.3f}'
+                  f'{f"[{lo:+.3f}, {hi:+.3f}]":>18}{np.mean([c != GUARD_DEFAULT for c in chosen]):>10.0%}')
 
     # Split-half oracle: choose on one half of the patches, score on the other half, and the reverse
     gains_in, gains_out = [], []

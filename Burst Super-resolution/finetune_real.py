@@ -62,6 +62,11 @@ def main() -> None:
                              'burst with a shot level drawn log-uniformly from [1e-4, noise_max] (0 = off). '
                              'Same noise model and level scale as robustness_sweep.py')
     parser.add_argument('--noise_prob', default=0.5, type=float)
+    parser.add_argument('--blur_max', default=0.0, type=float,
+                        help='Blur augmentation: with probability --blur_prob, blur every input frame with a Gaussian '
+                             'whose sigma is drawn uniformly from [0.3, blur_max] packed raw pixels (0 = off). '
+                             'Same blur as robustness_sweep.py. Applied before the noise, as in a camera')
+    parser.add_argument('--blur_prob', default=0.5, type=float)
     parser.add_argument('--eval_every', default=500, type=int)
     parser.add_argument('--eval_bursts', default=12, type=int, help='Eval bursts, spread across the eval scenes')
     parser.add_argument('--workers', default=3, type=int)
@@ -107,12 +112,14 @@ def main() -> None:
         for burst, gt, _, _, _ in loader:
             burst, gt = burst.cuda(), gt.cuda()
             model_input = burst
+            if args.blur_max > 0 and random.random() < args.blur_prob:
+                model_input = degrade(model_input, 'blur', random.uniform(0.3, args.blur_max), noise_gen)
             if args.noise_max > 0 and random.random() < args.noise_prob:
                 shot = math.exp(random.uniform(math.log(1e-4), math.log(args.noise_max)))
-                model_input = degrade(burst, 'noise', shot, noise_gen)
+                model_input = degrade(model_input, 'noise', shot, noise_gen)
             pred = model(model_input)
             # Same alignment + colour matching as the evaluation metric; gradients flow through the warp. The colour
-            # transform is always fitted on the clean burst, so the target does not depend on the injected noise.
+            # transform is always fitted on the clean burst, so the target does not depend on the injected noise/blur.
             pred_m, gt_c, valid = aligner(pred, gt, burst)
             validf = valid.float()
             if validf.sum() < 1:

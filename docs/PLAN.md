@@ -11,6 +11,36 @@ Last updated: 2026-11-16. Scope: real-world burst super-resolution (BurstSR, Tra
 
 Both tracks depend on a baseline we can trust, so that comes first (Phase 0).
 
+## Priorities (review of 2026-11-16)
+
+**Picking a better frame helps a little. Making the model handle noise and blur helps much more.**
+
+| Lever | Size of the gain | State |
+|---|---|---|
+| Blur robustness | Slight blur (sigma 0.65) costs 3 dB | First fine-tune running (T17) |
+| Noise robustness | +3 to +12 dB on noisy input, about -0.1 dB on clean input | First fine-tune done (T13) |
+| A properly trained model | Everything else depends on it; ours is a 10-minute fix of a broken checkpoint | T01 / T02 open |
+| Reference frame on clean bursts | +0.3 dB for frame 2 on dev scenes, -0.06 dB on test scenes: no reliable gain | Checked (T06) |
+| Reference frame when the reference is damaged | Up to 7.5 dB recovered when the reference is blurred | Guarded selector built (T16) |
+
+Frame selection in plain terms:
+
+- The model uses the first frame of the burst as its reference. On clean bursts it barely matters which early
+  frame is used: frame 2 looked better on the dev scenes and did not on the test scenes, and even a perfect
+  per-burst choice adds only 0.1 to 0.5 dB.
+- It matters a lot when the reference frame is damaged. A blurred reference alone costs up to 10 dB, while one
+  blurred non-reference frame costs nothing (T15).
+- So the selector's job is insurance, not fine-tuning: keep the default frame unless it looks abnormal next to its
+  neighbours, and then use the most typical early frame (T16).
+
+Order of work that follows from this:
+
+1. T15: damage one frame on purpose and measure the cost.
+2. T16: guarded selector, on clean bursts and on bursts with a damaged reference.
+3. T17 and T13: blur and noise robustness by training. This is where most of the effort goes.
+4. T04: check on synthetic bursts that early frames are really better, and not just favoured by a ground truth
+   that is lined up with frame 0.
+
 ## Where we are
 
 | Item | State |
@@ -109,6 +139,63 @@ Intervals are 95% bootstrap over bursts (4 scenes, so they are optimistic).
   the ground truth is registered to frame 0. We cannot yet tell "later frames are worse references" from "the
   metric favours outputs near frame 0". Synthetic bursts, where ground truth can be rendered for any reference,
   can separate the two (added to T04).
+
+### Track A: frame 2 on the test scenes (T06)
+
+40 test-scene bursts, references 0 to 4, calibrated model, common-region PSNR.
+
+| Reference policy | Dev scenes, gain over frame 0 | Test scenes, gain over frame 0 |
+|---|---|---|
+| Frame 2 | +0.34 [+0.07, +0.64] | -0.06 [-0.13, +0.01] |
+| Sharpest of the first 3 frames | +0.22 [+0.02, +0.45] | -0.03 [-0.07, +0.01] |
+| Best frame per burst (oracle) | +0.59 [+0.33, +0.90] | +0.12 [+0.07, +0.18] |
+| Oracle, chosen on half the patches and scored on the rest | +0.54 | +0.08 |
+
+The dev-scene gain for frame 2 does not carry over. On the test scenes no fixed frame or sharpness rule beats
+frame 0, and the headroom is about 0.1 dB. On clean bursts the choice among early frames is not worth pursuing.
+
+### Track A / B: what one damaged frame costs (T15)
+
+12 dev-scene bursts, calibrated model, frame 0 as reference. Clean result: 45.90 dB.
+
+| Blur sigma | All frames | Reference only | The 13 other frames only | One other frame only |
+|---|---|---|---|---|
+| 0.5 | 44.45 | 45.90 | 44.90 | 45.94 |
+| 1 | 39.41 | 43.30 | 43.06 | 45.94 |
+| 2 | 36.33 | 38.31 | 44.14 | 45.94 |
+| 3 | 35.70 | 35.88 | 44.52 | 45.95 |
+
+| Noise level | All frames | Reference only | The 13 other frames only |
+|---|---|---|---|
+| 0.003 | 44.05 | 45.08 | 43.89 |
+| 0.01 | 40.63 | 42.26 | 42.52 |
+| 0.03 | 34.91 | 37.25 | 42.15 |
+| 0.1 | 23.56 | 22.44 | 39.47 |
+
+- **A damaged reference accounts for most of the loss.** With only the reference blurred at sigma 2 the model
+  loses 7.6 dB of the 9.6 dB it loses when every frame is blurred. Heavy noise on the reference alone is as bad
+  as heavy noise everywhere.
+- **One damaged non-reference frame costs nothing**, so rejecting individual frames is not worth building.
+- **Slight blur on the reference alone (sigma 0.5) costs nothing:** the other frames make up for it.
+- **Blurring the other frames hurts most at sigma 1**, then less. Heavily blurred frames seem to be ignored;
+  moderately blurred ones are used and do harm. This is a lead for T11.
+
+### Track A: guarded selector (T16)
+
+First version: frame 2, unless another of the first five frames is sharper by 10%. 12 dev-scene bursts.
+
+| Damage | Fixed frame 2 | First version |
+|---|---|---|
+| Blur sigma 2 on frame 2 only | 38.22 | 45.70 |
+| Noise 0.03 on frame 1 only | 45.99 | 37.79 |
+| Noise 0.1 on frame 1 only | 45.93 | 22.83 |
+| Noise 0.03 on frame 2 only | 38.15 | 38.15 |
+
+It avoids a blurred reference and recovers 7.5 dB, but noise raises the sharpness score, so it switches to a
+noisy frame and never leaves a noisy default. The rule was changed to keep frame 2 unless its sharpness is more
+than 20% away from the median of the other early frames in either direction, and then to use the frame closest to
+that median. On clean bursts the new rule matches fixed frame 2 (it switches in 0% of dev and 2% of test bursts).
+Its results on damaged bursts are pending.
 
 ### Track B: limits (T09-T10, first pass)
 
@@ -225,6 +312,8 @@ numbers are provisional until re-run on the Phase 0 model.
 
 - 2026-11-15: environment ported, reference-frame sweep and visualisation added, 23-burst test run.
 - 2026-11-16: checkpoint diagnosed (Finding 2), plan and tickets written.
+- 2026-11-16: priorities review; single-frame degradation test (T15), frame 2 on test scenes (T06), guarded
+  selector (T16), blur augmentation option (T17). See "Results so far".
 - 2026-11-16: calibration fine-tune (T02), scene splits (T03, partly), common-region scoring and selection
   policies (T04-T06 first pass), degradation harness and breaking points (T09-T10 first pass), noise-augmented
   fine-tune (T13 first pass). See "Results so far".

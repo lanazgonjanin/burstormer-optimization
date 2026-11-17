@@ -236,6 +236,63 @@ Depends on: T02, T11
 **Done when.** The breaking noise level at least doubles at the same failure threshold, within the clean-input
 budget, on held-out scenes.
 
+## T15: Single-frame degradation test: how much does one bad frame cost?
+Labels: track-a-ref-frame, track-b-robustness
+Milestone: M1 Reference-frame selection
+Depends on: T09
+
+**Why.** On clean bursts a reference selector can add only about 0.2 dB over always using frame 2. Selection is
+worth building only if a damaged reference costs much more than that. This also answers the first T11 question
+(reference only versus non-reference frames only).
+
+**Tasks.**
+- [x] `--degrade_frames` in `robustness_sweep.py`: blur or noise on the listed frames only.
+- [x] Blur and noise on the reference only, on the 13 other frames only, and on one non-reference frame.
+- [x] Record the cost of each next to the all-frames result in `docs/PLAN.md`.
+
+**Done when.** We can say whether a damaged reference costs dB or tenths of a dB.
+
+## T16: Guarded reference selector
+Labels: track-a-ref-frame
+Milestone: M1 Reference-frame selection
+Depends on: T06, T15
+
+**Why.** Sharpness over all frames loses to frame 0 because it picks late frames. A rule that defaults to frame 2
+and switches only among the first five frames, and only for a clear sharpness margin, cannot do much harm on clean
+bursts and can avoid a damaged reference.
+
+**Tasks.**
+- [x] `ref_selection.py` (`guarded_choice`) and `select_reference` in `reference_frame_sweep.py`.
+- [x] `guarded` policy and a margin table in `analyze_reference_policies.py`.
+- [x] `--ref_policy` in `robustness_sweep.py`, so the selector is tested on damaged bursts.
+- [x] Clean bursts: dev, then test scenes, against frame 0 and frame 2.
+- [ ] Damaged bursts: blur on frame 2 only; noise on frame 1 only and on frame 2 only. First version done (failed
+      the noise check); re-test of the changed rule pending.
+- [ ] `--ref_policy` in `Track_2_evaluation.py`.
+- [x] A rule that is not fooled by a single noisy frame (two-sided check against the median of the early frames).
+
+**Done when.** The rule is no worse than frame 2 on clean test bursts and recovers most of the loss from a
+damaged reference.
+
+## T17: Blur-augmented fine-tuning
+Labels: track-b-robustness, mitigation, training
+Milestone: M3 Mitigation
+Depends on: T02, T10
+
+**Why.** Blur is the largest untreated weakness: 3 dB lost at sigma 0.65. Noise augmentation moved the noise
+breaking point 2.7x in a 10-minute fine-tune; blur gets the same treatment.
+
+**Tasks.**
+- [x] `--blur_max` / `--blur_prob` in `finetune_real.py`.
+- [ ] First pass: combined noise + blur fine-tune (3,000 steps); blur and noise sweeps against the calibrated and
+      noise-augmented models.
+- [ ] Blur-only run, to separate the effect of the two augmentations.
+- [ ] Realistic blur: motion blur kernels and blur that differs between frames.
+- [ ] Longer run and clean-input regression check on the test scenes (target: at most 0.1 dB loss).
+
+**Done when.** The blur breaking point at least doubles at the same failure threshold, within the clean-input
+budget, on held-out scenes.
+
 ## T14: Final report
 Labels: infra
 Milestone: M3 Mitigation
